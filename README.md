@@ -1,0 +1,1 @@
+This is the backend of a real-time chat using Go and Flutter
