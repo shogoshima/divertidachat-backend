@@ -24,12 +24,18 @@ var persistenceBroadcast = make(chan Message)     // Persistence channel
 var persistenceMutex = &sync.Mutex{}              // Protect persistence operations
 
 type Message struct {
-	ID       uuid.UUID `json:"id"`
-	Text     string    `json:"text"`
-	SenderId uuid.UUID `json:"sender_id"`
-	ChatId   uuid.UUID `json:"chat_id"`
-	ChatName string    `json:"chat_name"`
-	SentAt   time.Time `json:"sent_at"`
+	ID           uuid.UUID `json:"id"`
+	Text         string    `json:"text"`
+	SenderId     uuid.UUID `json:"sender_id"`
+	ChatId       uuid.UUID `json:"chat_id"`
+	ChatName     string    `json:"chat_name"`
+	SentAt       time.Time `json:"sent_at"`
+	TextFilterID int       `json:"text_filter_id"`
+}
+
+type WSResponse struct {
+	Type    string `json:"type"`    // e.g., "message", "error"
+	Payload any    `json:"payload"` // actual content or error
 }
 
 func HandleWebSocket(c *gin.Context) {
@@ -70,18 +76,31 @@ func HandleWebSocket(c *gin.Context) {
 			break
 		}
 
-		var gptMessage []models.GPTMessage
-		gptMessage = append(gptMessage, models.GPTMessage{
-			Role:    "user",
-			Content: `Reescreva a seguinte mensagem com um estereótipo de "diva": ` + msg.Text,
-		})
-		gptResponse, err := services.GetGPTResponse(gptMessage)
-		if err != nil {
-			fmt.Println("Error getting GPT response:", err)
-			continue
-		}
+		if msg.TextFilterID != 0 {
+			var gptMessage []models.GPTMessage
+			gptMessage = append(gptMessage, models.GPTMessage{
+				Role:    "developer",
+				Content: "You are an assistant that rewrites the user’s message in the same language as it was written, without adding quotation marks.",
+			})
+			gptMessage = append(gptMessage, models.GPTMessage{
+				Role:    "user",
+				Content: "Rewrite the following message " + TextFilters[msg.TextFilterID].Command + ": '" + msg.Text + "'",
+			})
+			gptResponse, err := services.GetGPTResponse(gptMessage, msg.SenderId)
+			if err != nil {
+				fmt.Println("Error getting GPT response:", err)
+				// Notify the user about the error
+				conn.WriteJSON(WSResponse{
+					Type: "error",
+					Payload: map[string]string{
+						"message": err.Error(),
+					},
+				})
+				continue
+			}
 
-		msg.Text = gptResponse
+			msg.Text = gptResponse
+		}
 
 		fmt.Println("Received message:", msg.Text)
 		Broadcast <- msg
@@ -115,7 +134,10 @@ func HandleMessages() {
 
 			// Send message
 			fmt.Printf("Sending message to user ID %d: %+v\n", chatUser.UserID, msg)
-			err := conn.WriteJSON(msg)
+			err := conn.WriteJSON(WSResponse{
+				Type:    "message",
+				Payload: msg,
+			})
 			if err != nil {
 				fmt.Println("Error writing message:", err)
 				conn.Close()
@@ -149,7 +171,14 @@ func HandlePersistence() {
 		if err != nil {
 			fmt.Println("Failed to save message to database:", err)
 		}
-		fmt.Println("Message saved to database:", message)
+
+		err = services.DB.Model(&models.Chat{}).
+			Where("id = ?", msg.ChatId).
+			UpdateColumn("updated_at", time.Now()).Error
+		if err != nil {
+			fmt.Println("Failed to update chat", err)
+		}
+		fmt.Println("Chat updated successfully")
 
 		// Unlock the persistence operations
 		persistenceMutex.Unlock()

@@ -50,13 +50,16 @@ func VerifyAndGetUserInfo(token string) (models.User, error) {
 	result := DB.Where("email = ?", tokenInfo.Email).First(&user)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			now := time.Now()
+			photoURL := tokenInfo.Picture
+			
 			// User not found, so create a new user.
 			user = models.User{
 				Name:     tokenInfo.Name,
 				Email:    tokenInfo.Email,
-				PhotoURL: tokenInfo.Picture,
+				PhotoURL: &photoURL,
 				Username: generateUsername(tokenInfo.Email),
-				LastSeen: time.Now(),
+				LastSeen: &now,
 			}
 			if err := DB.Create(&user).Error; err != nil {
 				// In production, you might want to log the error

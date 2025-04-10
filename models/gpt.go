@@ -14,4 +14,7 @@ type GPTResponse struct {
 	Choices []struct {
 		Message GPTMessage `json:"message"`
 	} `json:"choices"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
 }

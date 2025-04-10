@@ -4,6 +4,8 @@ go 1.24.1
 
 require github.com/golang-jwt/jwt v3.2.2+incompatible
 
+require github.com/robfig/cron/v3 v3.0.0 // indirect
+
 require (
 	cloud.google.com/go/auth v0.15.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect

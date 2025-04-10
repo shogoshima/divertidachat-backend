@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -67,4 +68,34 @@ func GetAuthenticatedUser(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"user": user})
+}
+
+func ResetGPTUsage() {
+	// Actually perform the update
+	err := services.DB.Model(&models.User{}).Where("1 = 1").UpdateColumn("used_tokens", 0).Error
+	if err != nil {
+		fmt.Println("Failed to reset used_tokens:", err)
+		return
+	}
+
+	fmt.Println("Successfully reset used_tokens for all users")
+}
+
+func UpdateFCMToken(c *gin.Context) {
+	id, _ := c.Get("id")
+	var fcmToken models.FCMToken
+
+	if err := c.BindJSON(&fcmToken); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "FCM Token not provided"})
+	}
+
+	err := services.DB.Model(&models.User{}).
+		Where("id = ?", id).
+		UpdateColumn("fcm_token", fcmToken.Token).Error
+	if err != nil {
+		fmt.Println("Failed to update fcm token", err)
+	}
+	fmt.Println("Token updated successfully")
+
+	c.JSON(http.StatusOK, gin.H{"message": "Token updated successfully"})
 }
