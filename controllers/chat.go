@@ -242,6 +242,15 @@ func GetSingleUpdatedChat(c *gin.Context) {
 		return
 	}
 
+	// If it is not a group chat, make the name of the chat the name of the other user
+	if !chat.IsGroup {
+		for _, participant := range participants {
+			if participant.ID != userID {
+				chat.Name = participant.Name
+			}
+		}
+	}
+
 	var messages []models.Message
 	if err := services.DB.
 		Where("chat_id = ? AND sent_at > ?", chat.ID, sentAfter).
@@ -253,6 +262,7 @@ func GetSingleUpdatedChat(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"chat": models.ChatDetails{
 		ChatID:       chat.ID,
+		ChatName:     chat.Name,
 		Messages:     messages,
 		Participants: participants,
 	}})
