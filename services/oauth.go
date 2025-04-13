@@ -11,7 +11,6 @@ import (
 
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/shogoshima/divertidachat-backend/models"
 )
 
@@ -29,22 +28,22 @@ type googleTokenInfo struct {
 
 // GetUserInfo verifies the provided token and returns the corresponding User record.
 // If no user is found for the given token, it creates a new user based on the token info.
-func VerifyAndGetUserInfo(token string) (models.UserPublicInfo, uuid.UUID, error) {
+func VerifyAndGetUserInfo(token string) (models.UserPublicInfo, error) {
 	resp, err := http.Get(googleTokenInfoURL + token)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		// If verification fails, return an empty user.
-		return models.UserPublicInfo{}, uuid.Nil, fmt.Errorf("failed to verify token: %w", err)
+		return models.UserPublicInfo{}, fmt.Errorf("failed to verify token: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var tokenInfo googleTokenInfo
 	if err := json.NewDecoder(resp.Body).Decode(&tokenInfo); err != nil {
-		return models.UserPublicInfo{}, uuid.Nil, fmt.Errorf("failed to decode token info: %w", err)
+		return models.UserPublicInfo{}, fmt.Errorf("failed to decode token info: %w", err)
 	}
 
 	// Check that the token was issued for your client ID
 	if tokenInfo.Iss != "accounts.google.com" && tokenInfo.Iss != "https://accounts.google.com" {
-		return models.UserPublicInfo{}, uuid.Nil, fmt.Errorf("token issuer invalid: %s", tokenInfo.Iss)
+		return models.UserPublicInfo{}, fmt.Errorf("token issuer invalid: %s", tokenInfo.Iss)
 	}
 
 	var user models.User
@@ -64,20 +63,21 @@ func VerifyAndGetUserInfo(token string) (models.UserPublicInfo, uuid.UUID, error
 			}
 			if err := DB.Create(&user).Error; err != nil {
 				// In production, you might want to log the error
-				return models.UserPublicInfo{}, uuid.Nil, fmt.Errorf("failed to create user: %w", err)
+				return models.UserPublicInfo{}, fmt.Errorf("failed to create user: %w", err)
 			}
 		} else {
 			// For other DB errors, return an empty user.
-			return models.UserPublicInfo{}, uuid.Nil, fmt.Errorf("failed to query user: %w", result.Error)
+			return models.UserPublicInfo{}, fmt.Errorf("failed to query user: %w", result.Error)
 		}
 	}
 
 	return models.UserPublicInfo{
+		ID:       user.ID,
 		Name:     user.Name,
 		Username: user.Username,
 		PhotoURL: user.PhotoURL,
 		LastSeen: user.LastSeen,
-	}, user.ID, nil
+	}, nil
 
 }
 
