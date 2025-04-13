@@ -15,12 +15,14 @@ func AuthMiddleware(c *gin.Context) {
 	if authHeader == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing token"})
 		c.Abort()
+		return
 	}
 
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token format"})
 		c.Abort()
+		return
 	}
 
 	jwtToken := parts[1]
@@ -29,6 +31,7 @@ func AuthMiddleware(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 		c.Abort()
+		return
 	}
 
 	// Set the user in the context so that handlers can access it.

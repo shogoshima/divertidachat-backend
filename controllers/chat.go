@@ -3,7 +3,7 @@ package controllers
 import (
 	"errors"
 	"net/http"
-	"time"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -57,7 +57,7 @@ func CreateSingleChat(c *gin.Context) {
 	}
 
 	// Create a new chat
-	newChat := models.Chat{IsGroup: false, Name: targetUser.Name}
+	newChat := models.Chat{IsGroup: false}
 	if err := services.DB.Create(&newChat).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create chat"})
 		return
@@ -74,136 +74,122 @@ func CreateSingleChat(c *gin.Context) {
 	}
 
 	// Create Chat Details to return to user
-	chatDetails := models.ChatDetails{
-		ChatID:       newChat.ID,
-		ChatName:     newChat.Name,
-		Messages:     []models.Message{},
-		Participants: []models.User{currentUser, targetUser},
+	chatSummary := models.ChatSummary{
+		ChatID:    newChat.ID,
+		IsGroup:   newChat.IsGroup,
+		ChatName:  targetUser.Name,
+		ChatPhoto: targetUser.PhotoURL,
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"chat": chatDetails})
+	c.JSON(http.StatusCreated, gin.H{"chat": chatSummary})
 }
 
-func GetChatsAndTimestamps(c *gin.Context) {
+func GetChatSummaries(c *gin.Context) {
 	// Extract the user ID from context
 	userID, _ := c.Get("id")
 
-	// Get the chats for the user
+	// Fetch chats that belong to this user
 	var chats []models.Chat
 	if err := services.DB.
-		Where("id IN (SELECT chat_id FROM chat_users WHERE user_id = ?)", userID).
+		Select("chats.id, chats.name, chats.is_group").
+		Joins("JOIN chat_users ON chats.id = chat_users.chat_id").
+		Where("chat_users.user_id = ?", userID).
+		Order("chats.updated_at DESC").
 		Find(&chats).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch chats"})
 		return
 	}
 
-	var chatsWithTimestamps []models.ChatTimestamp
-	for _, chat := range chats {
-		chatTimestamp := models.ChatTimestamp{
-			ChatID:    chat.ID,
-			UpdatedAt: chat.UpdatedAt,
-		}
-		chatsWithTimestamps = append(chatsWithTimestamps, chatTimestamp)
-	}
-
-	c.JSON(http.StatusOK, gin.H{"timestamps": chatsWithTimestamps})
-}
-
-func GetAllUpdatedChats(c *gin.Context) {
-	// Extract the user ID from context
-	userID, _ := c.Get("id")
-
-	// Get query parameters
-	chatIDsStr := c.QueryArray("chat_ids")
-	if len(chatIDsStr) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "chat_ids query parameter is required"})
+	if len(chats) == 0 {
+		c.JSON(http.StatusOK, gin.H{"chats": []models.ChatSummary{}})
 		return
 	}
 
-	var chatIDs []uuid.UUID
-	for _, idStr := range chatIDsStr {
-		id, err := uuid.Parse(idStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chat_id: " + idStr})
-			return
-		}
-		chatIDs = append(chatIDs, id)
+	chatIDs := make([]uuid.UUID, len(chats))
+	for i, chat := range chats {
+		chatIDs[i] = chat.ID
 	}
 
-	sentAfterStr := c.Query("sent_after")
-	if sentAfterStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "sent_after query parameter is required"})
-		return
+	// Fetch all participants grouped by chat
+	type ChatParticipant struct {
+		ChatID   uuid.UUID
+		UserID   uuid.UUID
+		Name     string
+		Username string
+		PhotoURL *string
 	}
 
-	sentAfter, err := time.Parse(time.RFC3339, sentAfterStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid sent_after timestamp"})
-		return
-	}
-
-	// Fetch chats that match the provided IDs, belong to this user, and have been updated after the provided timestamp
-	var chats []models.Chat
+	var rawParticipants []ChatParticipant
 	if err := services.DB.
-		Where("id IN ?", chatIDs).
-		Where("id IN (SELECT chat_id FROM chat_users WHERE user_id = ?)", userID).
-		Where("updated_at > ?", sentAfter).
-		Find(&chats).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch chats"})
+		Table("chat_users").
+		Select("chat_users.chat_id, users.id AS user_id, users.name, users.username, users.photo_url").
+		Joins("JOIN users ON users.id = chat_users.user_id").
+		Where("chat_users.chat_id IN ?", chatIDs).
+		Find(&rawParticipants).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch participants"})
 		return
 	}
 
-	var chatsWithMessages []models.ChatDetails
-	for _, chat := range chats {
-		// Fetch the chat members using a subquery on chat_users
-		var participants []models.User
-		if err := services.DB.
-			Where("id IN (?)",
-				services.DB.Table("chat_users").
-					Select("user_id").
-					Where("chat_id = ?", chat.ID),
-			).
-			Find(&participants).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch chat members"})
-			return
-		}
+	// Group by chatID
+	participantsByChat := make(map[uuid.UUID][]models.UserPublicInfo)
+	for _, p := range rawParticipants {
+		participantsByChat[p.ChatID] = append(participantsByChat[p.ChatID], models.UserPublicInfo{
+			ID:       p.UserID,
+			Name:     p.Name,
+			Username: p.Username,
+			PhotoURL: p.PhotoURL,
+		})
+	}
 
-		// If it is not a group chat, make the name of the chat the name of the other user
+	var chatSummaries []models.ChatSummary
+	for _, chat := range chats {
+		participants := participantsByChat[chat.ID]
+
+		// If not a group, name = other participant's name
+		var chatPhoto *string
+		var chatName string = chat.Name
 		if !chat.IsGroup {
-			for _, participant := range participants {
-				if participant.ID != userID {
-					chat.Name = participant.Name
+			for _, p := range participants {
+				if p.ID != userID {
+					chatName = p.Name
+					chatPhoto = p.PhotoURL
+					break
 				}
 			}
 		}
 
-		// Get only the messages for the chat that were sent after the provided timestamp,
-		// ordered by sent time descending
-		var messages []models.Message
+		// Fetch latest message for this chat
+		var message models.Message
 		if err := services.DB.
-			Where("chat_id = ? AND sent_at > ?", chat.ID, sentAfter).
+			Where("chat_id = ?", chat.ID).
 			Order("sent_at DESC").
-			Find(&messages).Error; err != nil {
+			Limit(1).
+			First(&message).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch messages"})
 			return
 		}
 
-		chatsWithMessages = append(chatsWithMessages, models.ChatDetails{
-			ChatID:       chat.ID,
-			ChatName:     chat.Name,
-			Messages:     messages,
-			Participants: participants,
+		var lastMsg *string
+		if message.Text != "" {
+			lastMsg = &message.Text
+		}
+
+		chatSummaries = append(chatSummaries, models.ChatSummary{
+			ChatID:      chat.ID,
+			ChatName:    chatName,
+			IsGroup:     chat.IsGroup,
+			LastMessage: lastMsg,
+			ChatPhoto:   chatPhoto,
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"chats": chatsWithMessages})
+	c.JSON(http.StatusOK, gin.H{"chats": chatSummaries})
 }
 
-func GetSingleUpdatedChat(c *gin.Context) {
+func GetSingleChatSummary(c *gin.Context) {
 	// Extract the user ID from context
 	userID, _ := c.Get("id")
 
-	// Get the chat ID from the URL parameter
 	chatIDStr := c.Param("chatId")
 	chatID, err := uuid.Parse(chatIDStr)
 	if err != nil {
@@ -211,30 +197,96 @@ func GetSingleUpdatedChat(c *gin.Context) {
 		return
 	}
 
-	sentAfterStr := c.Query("sent_after")
-	if sentAfterStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "sent_after query parameter is required"})
-		return
-	}
-
-	sentAfter, err := time.Parse(time.RFC3339, sentAfterStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid sent_after timestamp"})
-		return
-	}
-
+	// Ensure the user belongs to this chat
 	var chat models.Chat
 	if err := services.DB.
-		Where("id = ? AND id IN (SELECT chat_id FROM chat_users WHERE user_id = ?)", chatID, userID).
+		Select("id, name, is_group").
+		Where("id = ? AND EXISTS (SELECT 1 FROM chat_users WHERE chat_id = ? AND user_id = ?)",
+			chatID, chatID, userID).
 		First(&chat).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Chat not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Chat not found or access denied"})
 		return
 	}
 
+	// Get the participants
+	var participants []models.User
+	if err := services.DB.
+		Table("users").
+		Select("users.id", "users.name", "users.username", "users.photo_url").
+		Joins("JOIN chat_users ON chat_users.user_id = users.id").
+		Where("chat_users.chat_id = ?", chatID).
+		Find(&participants).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch participants"})
+		return
+	}
+
+	// If not a group, name = other participant's name
+	var chatPhoto *string
+	var chatName string = chat.Name
+	if !chat.IsGroup {
+		for _, p := range participants {
+			if p.ID != userID {
+				chatName = p.Name
+				chatPhoto = p.PhotoURL
+				break
+			}
+		}
+	}
+
+	// Fetch latest message for this chat
+	var message models.Message
+	if err := services.DB.
+		Where("chat_id = ?", chatID).
+		Order("sent_at DESC").
+		Limit(1).
+		First(&message).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch messages"})
+		return
+	}
+
+	var lastMsg *string
+	if message.Text != "" {
+		lastMsg = &message.Text
+	}
+
+	chatSummary := models.ChatSummary{
+		ChatID:      chatID,
+		ChatName:    chatName,
+		IsGroup:     chat.IsGroup,
+		LastMessage: lastMsg,
+		ChatPhoto:   chatPhoto,
+	}
+
+	c.JSON(http.StatusOK, gin.H{"chat": chatSummary})
+}
+
+func GetChatDetails(c *gin.Context) {
+	// Extract and validate IDs
+	userID, _ := c.Get("id")
+
+	chatIDStr := c.Param("chatId")
+	chatID, err := uuid.Parse(chatIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chat ID"})
+		return
+	}
+
+	// Ensure the user belongs to this chat
+	var chat models.Chat
+	if err := services.DB.
+		Select("id, name, is_group").
+		Where("id = ? AND EXISTS (SELECT 1 FROM chat_users WHERE chat_id = ? AND user_id = ?)",
+			chatID, chatID, userID).
+		First(&chat).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Chat not found or access denied"})
+		return
+	}
+
+	// Fetch participants (single query)
 	var participants []models.User
 	if err := services.DB.
 		Table("chat_users").
-		Select("users.*").
+		Select("users.id, users.name, users.username, users.photo_url").
 		Joins("JOIN users ON users.id = chat_users.user_id").
 		Where("chat_users.chat_id = ?", chat.ID).
 		Find(&participants).Error; err != nil {
@@ -242,28 +294,48 @@ func GetSingleUpdatedChat(c *gin.Context) {
 		return
 	}
 
-	// If it is not a group chat, make the name of the chat the name of the other user
-	if !chat.IsGroup {
-		for _, participant := range participants {
-			if participant.ID != userID {
-				chat.Name = participant.Name
-			}
-		}
+	var participantsPublicInfo []models.UserPublicInfo
+	for _, p := range participants {
+		participantsPublicInfo = append(participantsPublicInfo, models.UserPublicInfo{
+			ID:       p.ID,
+			Name:     p.Name,
+			Username: p.Username,
+			PhotoURL: p.PhotoURL,
+			LastSeen: p.LastSeen,
+		})
 	}
 
+	// Parse pagination params
+	pageStr := c.DefaultQuery("page", "1")
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page parameter"})
+		return
+	}
+	const pageSize = 40
+	offset := (page - 1) * pageSize
+
+	// Fetch paginated messages
 	var messages []models.Message
 	if err := services.DB.
-		Where("chat_id = ? AND sent_at > ?", chat.ID, sentAfter).
+		Select("id, chat_id, sender_id, text, sent_at").
+		Where("chat_id = ?", chat.ID).
 		Order("sent_at DESC").
+		Limit(pageSize).
+		Offset(offset).
 		Find(&messages).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch messages"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"chat": models.ChatDetails{
-		ChatID:       chat.ID,
-		ChatName:     chat.Name,
-		Messages:     messages,
-		Participants: participants,
-	}})
+	// Return structured response
+	c.JSON(http.StatusOK, gin.H{
+		"chat": models.ChatDetails{
+			ChatID:       chat.ID,
+			Participants: participantsPublicInfo,
+			Messages:     messages,
+			Page:         page,
+			PageSize:     pageSize,
+		},
+	})
 }

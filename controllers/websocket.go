@@ -28,7 +28,6 @@ type Message struct {
 	Text         string    `json:"text"`
 	SenderId     uuid.UUID `json:"sender_id"`
 	ChatId       uuid.UUID `json:"chat_id"`
-	ChatName     string    `json:"chat_name"`
 	SentAt       time.Time `json:"sent_at"`
 	TextFilterID int       `json:"text_filter_id"`
 }
@@ -133,7 +132,6 @@ func HandleMessages() {
 			}
 
 			// Send message
-			fmt.Printf("Sending message to user ID %d: %+v\n", chatUser.UserID, msg)
 			err := conn.WriteJSON(WSResponse{
 				Type:    "message",
 				Payload: msg,

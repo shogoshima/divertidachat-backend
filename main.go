@@ -42,21 +42,20 @@ func main() {
 	userRoutes := routes.Group("/users")
 	userRoutes.Use(middlewares.AuthMiddleware)
 	{
-		userRoutes.GET("/id/:userId", controllers.GetUserByID)               // Get user by ID
-		userRoutes.GET("/username/:username", controllers.GetUserByUsername) // Get user by username
-		userRoutes.GET("/me", controllers.GetAuthenticatedUser)              // Get authenticated user
-		userRoutes.PUT("/me", controllers.UpdateUser)                        // Update authenticated user
+		userRoutes.GET("/:username", controllers.GetUserByUsername) // Get user by username
+		userRoutes.GET("/me", controllers.GetAuthenticatedUser)     // Get authenticated user
+		userRoutes.PUT("/me", controllers.UpdateUser)               // Update authenticated user
 	}
 
 	// Chat routes
 	chatRoutes := routes.Group("/chats")
 	chatRoutes.Use(middlewares.AuthMiddleware)
 	{
-		chatRoutes.GET("/timestamps", controllers.GetChatsAndTimestamps) // Get user's chats with updated timestamps
-		chatRoutes.GET("/", controllers.GetAllUpdatedChats)              // Get all updated chats
-		chatRoutes.GET("/:chatId", controllers.GetSingleUpdatedChat)     // Get messages from a specific chat
-		chatRoutes.POST("/:username", controllers.CreateSingleChat)      // Create a new chat
-		chatRoutes.GET("/textfilters", controllers.GetTextFilters)       // Get text filters
+		chatRoutes.GET("/summaries", controllers.GetChatSummaries) // Get all updated chats
+		chatRoutes.GET("/summaries/:chatId", controllers.GetSingleChatSummary)
+		chatRoutes.GET("/:chatId", controllers.GetChatDetails)      // Get messages from a specific chat
+		chatRoutes.POST("/:username", controllers.CreateSingleChat) // Create a new chat
+		chatRoutes.GET("/textfilters", controllers.GetTextFilters)  // Get text filters
 	}
 
 	routes.Run(":8080")

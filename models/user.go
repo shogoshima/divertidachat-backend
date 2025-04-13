@@ -14,8 +14,6 @@ type User struct {
 	Username   string     `json:"username" gorm:"uniqueIndex;not null"`
 	Email      string     `json:"email" gorm:"uniqueIndex;not null"`
 	PhotoURL   *string    `json:"photo_url"`
-	CreatedAt  time.Time  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt  time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
 	LastSeen   *time.Time `json:"last_seen"`
 	UsedTokens int        `json:"used_tokens" gorm:"default:0"`
 	FCMToken   *string    `json:"fcm_token"`

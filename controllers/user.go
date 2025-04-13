@@ -10,26 +10,22 @@ import (
 	"github.com/shogoshima/divertidachat-backend/services"
 )
 
-// GetUser retrieves a user by ID.
-// Only authenticated users can view user details.
-func GetUserByID(c *gin.Context) {
-	id := c.Param("userId")
-	var user models.User
-	if err := services.DB.First(&user, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"user": user})
-}
-
 func GetUserByUsername(c *gin.Context) {
 	username := c.Param("username")
 	var user models.User
-	if err := services.DB.Where("username = ?", username).First(&user).Error; err != nil {
+	if err := services.DB.
+		Where("username = ?", username).First(&user).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": user})
+
+	c.JSON(http.StatusOK, gin.H{"user": models.UserPublicInfo{
+		ID:       user.ID,
+		Name:     user.Name,
+		Username: user.Username,
+		PhotoURL: user.PhotoURL,
+		LastSeen: user.LastSeen,
+	}})
 }
 
 // UpdateUser updates a user's profile.
@@ -42,7 +38,7 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
-	var input models.User
+	var input models.UserPublicInfo
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -57,17 +53,32 @@ func UpdateUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": user})
+
+	c.JSON(http.StatusOK, gin.H{"user": models.UserPublicInfo{
+		ID:       user.ID,
+		Name:     user.Name,
+		Username: user.Username,
+		PhotoURL: user.PhotoURL,
+		LastSeen: user.LastSeen,
+	}})
 }
 
 func GetAuthenticatedUser(c *gin.Context) {
 	id, _ := c.Get("id")
 	var user models.User
-	if err := services.DB.First(&user, id).Error; err != nil {
+	if err := services.DB.
+		First(&user, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": user})
+
+	c.JSON(http.StatusOK, gin.H{"user": models.UserPublicInfo{
+		ID:       user.ID,
+		Name:     user.Name,
+		Username: user.Username,
+		PhotoURL: user.PhotoURL,
+		LastSeen: user.LastSeen,
+	}})
 }
 
 func ResetGPTUsage() {

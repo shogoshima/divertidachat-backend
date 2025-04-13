@@ -28,7 +28,7 @@ func Authenticate(c *gin.Context) {
 
 	// Verify the Google token and get user info
 	googleToken := parts[1]
-	user, err := services.VerifyAndGetUserInfo(googleToken)
+	user, userID, err := services.VerifyAndGetUserInfo(googleToken)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid google token"})
 		c.Abort()
@@ -36,7 +36,7 @@ func Authenticate(c *gin.Context) {
 	}
 
 	// Create JWT token
-	jwtToken, err := services.GenerateJWT(user.ID)
+	jwtToken, err := services.GenerateJWT(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate JWT"})
 		c.Abort()

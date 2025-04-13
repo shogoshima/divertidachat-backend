@@ -14,6 +14,4 @@ type Message struct {
 	Text     string    `json:"text"`
 	SentAt   time.Time `json:"sent_at" gorm:"autoCreateTime"`
 	Seen     bool      `json:"seen" gorm:"default:false"`
-
-	Chat     Chat      `gorm:"constraint:OnDelete:CASCADE;"`
 }
