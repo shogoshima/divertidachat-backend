@@ -4,6 +4,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// For communication with the frontend
 type ChatSummary struct {
 	ChatID      uuid.UUID `json:"chat_id"`
 	ChatName    string    `json:"chat_name"`

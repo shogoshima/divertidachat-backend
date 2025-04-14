@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// For communication with the frontend
 type UserPublicInfo struct {
 	ID       uuid.UUID  `json:"id"`
 	Name     string     `json:"name"`

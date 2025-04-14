@@ -45,6 +45,7 @@ func main() {
 		userRoutes.GET("/:username", controllers.GetUserByUsername) // Get user by username
 		userRoutes.GET("/me", controllers.GetAuthenticatedUser)     // Get authenticated user
 		userRoutes.PUT("/me", controllers.UpdateUser)               // Update authenticated user
+		userRoutes.DELETE("/me", controllers.DeleteUser)            // Delete authenticated user
 	}
 
 	// Chat routes
@@ -53,9 +54,11 @@ func main() {
 	{
 		chatRoutes.GET("/summaries", controllers.GetChatSummaries) // Get all updated chats
 		chatRoutes.GET("/summaries/:chatId", controllers.GetSingleChatSummary)
-		chatRoutes.GET("/:chatId", controllers.GetChatDetails)      // Get messages from a specific chat
-		chatRoutes.POST("/:username", controllers.CreateSingleChat) // Create a new chat
-		chatRoutes.GET("/textfilters", controllers.GetTextFilters)  // Get text filters
+		chatRoutes.GET("/:chatId", controllers.GetChatDetails)     // Get messages from a specific chat
+		chatRoutes.GET("/textfilters", controllers.GetTextFilters) // Get text filters
+
+		chatRoutes.POST("/dm", controllers.CreateSingleChat)   // Create a new chat
+		chatRoutes.POST("/group", controllers.CreateGroupChat) // Create a new group chat
 	}
 
 	routes.Run(":8080")

@@ -7,6 +7,7 @@ import (
 )
 
 // Message represents an individual message within a chat.
+// For the database
 type Message struct {
 	ID       uuid.UUID `json:"id" gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
 	ChatID   uuid.UUID `json:"chat_id" gorm:"type:uuid"`

@@ -8,6 +8,7 @@ import (
 )
 
 // User represents a user in the chat system.
+// For the database
 type User struct {
 	ID         uuid.UUID  `json:"id" gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
 	Name       string     `json:"name"`
