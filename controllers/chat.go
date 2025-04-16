@@ -19,7 +19,7 @@ func GetChatSummaries(c *gin.Context) {
 	// Fetch chats that belong to this user
 	var chats []models.Chat
 	if err := services.DB.
-		Select("chats.id, chats.name, chats.is_group").
+		Select("chats.id, chats.name, chats.is_group, chats.chat_photo").
 		Joins("JOIN chat_users ON chats.id = chat_users.chat_id").
 		Where("chat_users.user_id = ?", userID).
 		Order("chats.updated_at DESC").
@@ -44,7 +44,7 @@ func GetChatSummaries(c *gin.Context) {
 		UserID   uuid.UUID
 		Name     string
 		Username string
-		PhotoURL *string
+		PhotoURL string
 	}
 
 	var rawParticipants []ChatParticipant
@@ -74,7 +74,7 @@ func GetChatSummaries(c *gin.Context) {
 		participants := participantsByChat[chat.ID]
 
 		// If not a group, name = other participant's name
-		var chatPhoto *string
+		var chatPhoto string = chat.ChatPhoto
 		var chatName string = chat.Name
 		if !chat.IsGroup {
 			for _, p := range participants {
@@ -128,7 +128,7 @@ func GetSingleChatSummary(c *gin.Context) {
 	// Ensure the user belongs to this chat
 	var chat models.Chat
 	if err := services.DB.
-		Select("id, name, is_group").
+		Select("id, name, is_group, chat_photo").
 		Where("id = ? AND EXISTS (SELECT 1 FROM chat_users WHERE chat_id = ? AND user_id = ?)",
 			chatID, chatID, userID).
 		First(&chat).Error; err != nil {
@@ -149,7 +149,7 @@ func GetSingleChatSummary(c *gin.Context) {
 	}
 
 	// If not a group, name = other participant's name
-	var chatPhoto *string
+	var chatPhoto string = chat.ChatPhoto
 	var chatName string = chat.Name
 	if !chat.IsGroup {
 		for _, p := range participants {

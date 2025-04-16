@@ -14,7 +14,7 @@ type User struct {
 	Name       string     `json:"name"`
 	Username   string     `json:"username" gorm:"uniqueIndex;not null"`
 	Email      string     `json:"email" gorm:"uniqueIndex;not null"`
-	PhotoURL   *string    `json:"photo_url"`
+	PhotoURL   string     `json:"photo_url"`
 	LastSeen   *time.Time `json:"last_seen"`
 	UsedTokens int        `json:"used_tokens" gorm:"default:0"`
 	FCMToken   *string    `json:"fcm_token"`

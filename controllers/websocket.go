@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -18,10 +19,11 @@ var upgrader = websocket.Upgrader{
 }
 
 var clients = make(map[uuid.UUID]*websocket.Conn) // Connected clients
-var Broadcast = make(chan Message)                // Broadcast channel
-var mutex = &sync.Mutex{}                         // Protect clients map
-var persistenceBroadcast = make(chan Message)     // Persistence channel
-var persistenceMutex = &sync.Mutex{}              // Protect persistence operations
+
+var Broadcast = make(chan Message)            // Broadcast channel
+var ActionBroadcast = make(chan Action)       // Action broadcast channel
+var mutex = &sync.Mutex{}                     // Protect clients map
+var PersistenceBroadcast = make(chan Message) // Persistence channel
 
 type Message struct {
 	ID           uuid.UUID `json:"id"`
@@ -32,15 +34,25 @@ type Message struct {
 	TextFilterID int       `json:"text_filter_id"`
 }
 
+type Action struct {
+	ChatId uuid.UUID `json:"chat_id"`
+	Type   string    `json:"type"`
+}
+
+type Inbound struct {
+	Type string          `json:"type"` // e.g. "message", "action"
+	Data json.RawMessage `json:"data"` // raw JSON payload
+}
+
 type WSResponse struct {
-	Type    string `json:"type"`    // e.g., "message", "error"
+	Type    string `json:"type"`    // e.g., "message", "error", "action"
 	Payload any    `json:"payload"` // actual content or error
 }
 
 func HandleWebSocket(c *gin.Context) {
 	userID := c.Param("userId")
 	if userID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing chat ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing user ID"})
 		return
 	}
 
@@ -58,52 +70,110 @@ func HandleWebSocket(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	mutex.Lock()
-	clients[parsedUserID] = conn
-	fmt.Println("Client connected:", conn.RemoteAddr())
-	mutex.Unlock()
+	addClient(parsedUserID, conn)
 
 	for {
-		var msg Message
-		err := conn.ReadJSON(&msg)
+		var in Inbound
+		err := conn.ReadJSON(&in)
 		if err != nil {
-			mutex.Lock()
-			delete(clients, parsedUserID)
-			mutex.Unlock()
-			fmt.Println("Client disconnected:", err)
 			fmt.Println("Read error:", err)
+			removeClient(parsedUserID)
 			break
 		}
 
-		if msg.TextFilterID != 0 {
-			var gptMessage []models.GPTMessage
-			gptMessage = append(gptMessage, models.GPTMessage{
-				Role:    "developer",
-				Content: "You are an assistant that rewrites the user’s message in the same language as it was written, without adding quotation marks.",
-			})
-			gptMessage = append(gptMessage, models.GPTMessage{
-				Role:    "user",
-				Content: "Rewrite the following message " + TextFilters[msg.TextFilterID].Command + ": '" + msg.Text + "'",
-			})
-			gptResponse, err := services.GetGPTResponse(gptMessage, msg.SenderId)
-			if err != nil {
-				fmt.Println("Error getting GPT response:", err)
-				// Notify the user about the error
-				conn.WriteJSON(WSResponse{
-					Type: "error",
-					Payload: map[string]string{
-						"message": err.Error(),
-					},
-				})
+		switch in.Type {
+		case "message":
+			var m Message
+			if err := json.Unmarshal(in.Data, &m); err != nil {
+				sendError(conn, "invalid message payload")
 				continue
 			}
 
-			msg.Text = gptResponse
+			// If no filtering, broadcast immediately:
+			if m.TextFilterID == 0 {
+				Broadcast <- m
+				PersistenceBroadcast <- m
+				continue
+			}
+
+			// Otherwise, do the GPT call asynchronously:
+			go func(origConn *websocket.Conn, msg Message) {
+				// call GPT
+				var gptMessage []models.GPTMessage
+				gptMessage = append(gptMessage, models.GPTMessage{
+					Role:    "developer",
+					Content: "You are an assistant that rewrites the user’s message in the same language as it was written, without adding quotation marks.",
+				})
+				gptMessage = append(gptMessage, models.GPTMessage{
+					Role:    "user",
+					Content: "Rewrite the following message " + TextFilters[m.TextFilterID].Command + ": '" + m.Text + "'",
+				})
+
+				resp, err := services.GetGPTResponse(gptMessage, msg.SenderId)
+				if err != nil {
+					// note: use a helper that locks and deletes if needed
+					sendError(origConn, err.Error())
+					return
+				}
+
+				// update the text and push into your pipelines
+				msg.Text = resp
+				Broadcast <- msg
+				PersistenceBroadcast <- msg
+			}(conn, m)
+
+		case "action":
+			var a Action
+			if err := json.Unmarshal(in.Data, &a); err != nil {
+				sendError(conn, "invalid action payload")
+				continue
+			}
+
+			ActionBroadcast <- a
+
+		default:
+			sendError(conn, "unknown type "+in.Type)
 		}
 
-		fmt.Println("Received message:", msg.Text)
-		Broadcast <- msg
-		persistenceBroadcast <- msg
+	}
+}
+
+func HandleActions() {
+	for {
+		action := <-ActionBroadcast
+
+		chatID := action.ChatId
+		fmt.Println("Broadcasting action to chat ID:", chatID)
+
+		// Find all users in the chat (outside of mutex lock)
+		var chatUsers []models.ChatUser
+		err := services.DB.Where("chat_id = ?", chatID).Find(&chatUsers).Error
+		if err != nil {
+			fmt.Println("Failed to find chat users:", err)
+			continue
+		}
+
+		// Lock the clients map before iterating
+		mutex.Lock()
+		for _, chatUser := range chatUsers {
+			conn, ok := clients[chatUser.UserID]
+			if !ok {
+				fmt.Println("Client not found for user ID:", chatUser.UserID)
+				continue
+			}
+
+			// Send message
+			err := conn.WriteJSON(WSResponse{
+				Type:    "action",
+				Payload: action,
+			})
+			if err != nil {
+				fmt.Println("Error writing message:", err)
+				conn.Close()
+				delete(clients, chatUser.UserID)
+			}
+		}
+		mutex.Unlock()
 	}
 }
 
@@ -151,10 +221,7 @@ func HandlePersistence() {
 	// You can implement this function to save messages to your database.
 	// For example, you can use GORM to save the message to a "messages" table.
 	for {
-		msg := <-persistenceBroadcast
-
-		// Lock the persistence operations to prevent concurrent writes
-		persistenceMutex.Lock()
+		msg := <-PersistenceBroadcast
 
 		// Create a new message record in the database
 		message := models.Message{
@@ -177,8 +244,26 @@ func HandlePersistence() {
 			fmt.Println("Failed to update chat", err)
 		}
 		fmt.Println("Chat updated successfully")
-
-		// Unlock the persistence operations
-		persistenceMutex.Unlock()
 	}
+}
+
+func sendError(conn *websocket.Conn, msg string) {
+	conn.WriteJSON(WSResponse{
+		Type:    "error",
+		Payload: map[string]string{"message": msg},
+	})
+}
+
+func addClient(id uuid.UUID, conn *websocket.Conn) {
+	mutex.Lock()
+	clients[id] = conn
+	fmt.Println("Client connected:", conn.RemoteAddr())
+	mutex.Unlock()
+}
+
+func removeClient(id uuid.UUID) {
+	mutex.Lock()
+	delete(clients, id)
+	fmt.Println("Client disconnected.")
+	mutex.Unlock()
 }

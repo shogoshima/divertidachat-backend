@@ -57,7 +57,7 @@ func VerifyAndGetUserInfo(token string) (models.UserPublicInfo, error) {
 			user = models.User{
 				Name:     tokenInfo.Name,
 				Email:    tokenInfo.Email,
-				PhotoURL: &photoURL,
+				PhotoURL: photoURL,
 				Username: generateUsername(tokenInfo.Email),
 				LastSeen: &now,
 			}

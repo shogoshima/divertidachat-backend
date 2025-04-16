@@ -30,6 +30,7 @@ func main() {
 
 	// Start goroutines for handling WebSocket messages and persistence
 	go controllers.HandleMessages()
+	go controllers.HandleActions()
 	go controllers.HandlePersistence()
 
 	// WebSocket connection for real-time chat
@@ -52,13 +53,18 @@ func main() {
 	chatRoutes := routes.Group("/chats")
 	chatRoutes.Use(middlewares.AuthMiddleware)
 	{
-		chatRoutes.GET("/summaries", controllers.GetChatSummaries) // Get all updated chats
-		chatRoutes.GET("/summaries/:chatId", controllers.GetSingleChatSummary)
-		chatRoutes.GET("/:chatId", controllers.GetChatDetails)     // Get messages from a specific chat
 		chatRoutes.GET("/textfilters", controllers.GetTextFilters) // Get text filters
 
-		chatRoutes.POST("/dm", controllers.CreateSingleChat)   // Create a new chat
-		chatRoutes.POST("/group", controllers.CreateGroupChat) // Create a new group chat
+		chatRoutes.GET("/summaries", controllers.GetChatSummaries) // Get all updated chats
+		chatRoutes.GET("/summaries/:chatId", controllers.GetSingleChatSummary)
+		chatRoutes.GET("/:chatId", controllers.GetChatDetails) // Get messages from a specific chat
+
+		chatRoutes.POST("/dm", controllers.CreateSingleChat) // Create a new chat
+
+		chatRoutes.POST("/group", controllers.CreateGroupChat)             // Create a new group chat
+		chatRoutes.POST("/group/:chatId", controllers.AddUsersToGroupChat) // Add new users to group chat
+		chatRoutes.PUT("/group/:chatId", controllers.UpdateGroupChatInfo)  // Update group chat info (name, photo?)
+		chatRoutes.PUT("/group/leave/:chatId", controllers.LeaveGroupChat) // Leave from group chat
 	}
 
 	routes.Run(":8080")

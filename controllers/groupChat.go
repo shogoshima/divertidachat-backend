@@ -57,8 +57,9 @@ func CreateGroupChat(c *gin.Context) {
 
 	// Create the group chat
 	newChat := models.Chat{
-		IsGroup: true,
-		Name:    body.Name,
+		IsGroup:   true,
+		Name:      body.Name,
+		ChatPhoto: "https://picsum.photos/seed/" + body.Name + "/200",
 	}
 	if err := services.DB.Create(&newChat).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create chat"})
@@ -89,9 +90,10 @@ func CreateGroupChat(c *gin.Context) {
 	}
 
 	summary := models.ChatSummary{
-		ChatID:   newChat.ID,
-		IsGroup:  true,
-		ChatName: newChat.Name,
+		ChatID:    newChat.ID,
+		IsGroup:   true,
+		ChatName:  newChat.Name,
+		ChatPhoto: newChat.ChatPhoto,
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"chat": summary})
@@ -120,7 +122,7 @@ func AddUsersToGroupChat(c *gin.Context) {
 
 	var chat models.Chat
 	if err := services.DB.
-		Joins("JOIN chat_users cu ON chat_users.chat_id = chats.id").
+		Joins("JOIN chat_users cu ON cu.chat_id = chats.id").
 		Where("chats.id = ? AND cu.user_id = ? AND chats.is_group = true", chatID, currentUserID).
 		First(&chat).
 		Error; err != nil {
@@ -228,4 +230,59 @@ func LeaveGroupChat(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Successfully removed user from group chat"})
+}
+
+func UpdateGroupChatInfo(c *gin.Context) {
+	currentUserID, exists := c.Get("id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user context"})
+		return
+	}
+
+	var currentUser models.User
+	if err := services.DB.First(&currentUser, "id = ?", currentUserID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	chatIDParam := c.Param("chatId")
+	chatID, err := uuid.Parse(chatIDParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chat ID"})
+		return
+	}
+
+	var chat models.Chat
+	if err := services.DB.
+		Joins("JOIN chat_users cu ON cu.chat_id = chats.id").
+		Where("chats.id = ? AND cu.user_id = ? AND chats.is_group = true", chatID, currentUserID).
+		First(&chat).
+		Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Group chat not found or you’re not a member"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Parse request body
+	type requestBody struct {
+		Name string `json:"name" binding:"required"`
+	}
+	var body requestBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload: " + err.Error()})
+		return
+	}
+
+	chat.Name = body.Name
+
+	if err := services.DB.Save(&chat).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Chat updated successfully"})
+
 }

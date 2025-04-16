@@ -15,7 +15,7 @@ type Chat struct {
 	IsGroup   bool      `json:"is_group" gorm:"default:false"`
 	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt time.Time `json:"updated_at" gorm:"autoUpdateTime"`
-	ChatPhoto *string   `json:"chat_photo"`
+	ChatPhoto string    `json:"chat_photo"`
 
 	Messages  []Message  `gorm:"constraint:OnDelete:CASCADE;"`
 	ChatUsers []ChatUser `gorm:"constraint:OnDelete:CASCADE;"`
