@@ -13,15 +13,8 @@ import (
 )
 
 func CreateSingleChat(c *gin.Context) {
-	// Extract the user ID from context and the target username
-	currentUserID, _ := c.Get("id") // Ensure type conversion if necessary
-
-	// Get the current user
-	var currentUser models.User
-	if err := services.DB.First(&currentUser, "id = ?", currentUserID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	// Parse request body
 	type requestBody struct {
@@ -34,7 +27,7 @@ func CreateSingleChat(c *gin.Context) {
 	}
 
 	// Prevent chatting with oneself
-	if currentUser.Username == body.Username {
+	if CurrentUser.Username == body.Username {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "You cannot create a chat with yourself"})
 		return
 	}
@@ -57,7 +50,7 @@ func CreateSingleChat(c *gin.Context) {
 		JOIN chat_users cu2 ON cu1.chat_id = cu2.chat_id
 		JOIN chats ON chats.id = cu1.chat_id
 		WHERE cu1.user_id = ? AND cu2.user_id = ? AND chats.is_group = false
-	`, currentUser.ID, targetUser.ID).Scan(&result).Error
+	`, CurrentUser.ID, targetUser.ID).Scan(&result).Error
 
 	fmt.Println("chatID after query: ", result.ChatID)
 
@@ -80,7 +73,7 @@ func CreateSingleChat(c *gin.Context) {
 
 	// Add users to the chat in the ChatUser table
 	chatUsers := []models.ChatUser{
-		{ChatID: newChat.ID, UserID: currentUser.ID},
+		{ChatID: newChat.ID, UserID: CurrentUser.ID},
 		{ChatID: newChat.ID, UserID: targetUser.ID},
 	}
 	if err := services.DB.Create(&chatUsers).Error; err != nil {
@@ -92,7 +85,7 @@ func CreateSingleChat(c *gin.Context) {
 	summary := models.ChatSummary{
 		ChatID:    newChat.ID,
 		IsGroup:   newChat.IsGroup,
-		ChatName:  targetUser.Name,
+		ChatName:  targetUser.DisplayName,
 		ChatPhoto: targetUser.PhotoURL,
 	}
 

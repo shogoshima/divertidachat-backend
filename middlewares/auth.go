@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shogoshima/divertidachat-backend/models"
 	"github.com/shogoshima/divertidachat-backend/services"
 )
 
@@ -25,16 +26,24 @@ func AuthMiddleware(c *gin.Context) {
 		return
 	}
 
-	jwtToken := parts[1]
+	idToken := parts[1]
 
-	userID, err := services.ValidateJWT(jwtToken)
+	// Verify the ID token with Firebase
+	ctx := c.Request.Context()
+	token, err := services.AuthClient.VerifyIDToken(ctx, idToken)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
-		c.Abort()
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Set the user in the context so that handlers can access it.
-	c.Set("id", userID)
+	// Upsert the user in one round-trip
+	var user models.User
+	err = services.DB.Where("id = ?", token.UID).Find(&user).Error
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+	}
+
+	c.Set("currentUser", user)
+
 	c.Next()
 }

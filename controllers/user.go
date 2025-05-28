@@ -16,8 +16,8 @@ import (
 )
 
 // helper to extract IDs
-func getUserIDs(users []models.User) []uuid.UUID {
-	ids := make([]uuid.UUID, len(users))
+func getUserIDs(users []models.User) []string {
+	ids := make([]string, len(users))
 	for i, u := range users {
 		ids[i] = u.ID
 	}
@@ -33,38 +33,32 @@ func GetUserByUsername(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"user": models.UserPublicInfo{
-		ID:       user.ID,
-		Name:     user.Name,
-		Username: user.Username,
-		PhotoURL: user.PhotoURL,
-		LastSeen: user.LastSeen,
+	c.JSON(http.StatusOK, gin.H{"profile": models.PublicProfile{
+		ID:          user.ID,
+		DisplayName: user.DisplayName,
+		Username:    user.Username,
+		PhotoURL:    user.PhotoURL,
+		LastSeen:    user.LastSeen,
 	}})
 }
 
 // UpdateUser updates a user's profile.
 // The user must be authenticated; additional checks can be done to ensure users only update their own profile.
 func UpdateUser(c *gin.Context) {
-	id, _ := c.Get("id")
-	var user models.User
-	if err := services.DB.First(&user, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
-	var input models.UserPublicInfo
+	var input models.PublicProfile
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Update allowed fields.
-	user.Name = input.Name
-	user.Username = input.Username
-	user.PhotoURL = input.PhotoURL
+	// Update allowed fields
+	CurrentUser.Username = input.Username
 
 	var userExists models.User
-	err := services.DB.Where("username = ?", user.Username).First(&userExists).Error
+	err := services.DB.Where("username = ?", CurrentUser.Username).First(&userExists).Error
 	if err == nil {
 		// Found an existing user — this is a conflict
 		c.JSON(http.StatusConflict, gin.H{"error": "User with this username already exists"})
@@ -80,34 +74,25 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"user": models.UserPublicInfo{
-		ID:       user.ID,
-		Name:     user.Name,
-		Username: user.Username,
-		PhotoURL: user.PhotoURL,
-		LastSeen: user.LastSeen,
+	c.JSON(http.StatusOK, gin.H{"profile": models.PublicProfile{
+		ID:          CurrentUser.ID,
+		DisplayName: CurrentUser.DisplayName,
+		Username:    CurrentUser.Username,
+		PhotoURL:    CurrentUser.PhotoURL,
+		LastSeen:    CurrentUser.LastSeen,
 	}})
 }
 
 func DeleteUser(c *gin.Context) {
-	id, _ := c.Get("id")
-
-	var user models.User
-	if err := services.DB.First(&user, "id = ?", id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-		}
-		return
-	}
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	// Gather all one‑on‑one chat IDs the user is in
 	var dmChatIDs []uuid.UUID
 	if err := services.DB.
 		Model(&models.ChatUser{}).
 		Joins("JOIN chats ON chats.id = chat_users.chat_id").
-		Where("chat_users.user_id = ? AND chats.is_group = false", id).
+		Where("chat_users.user_id = ? AND chats.is_group = false", CurrentUser.ID).
 		Pluck("chat_users.chat_id", &dmChatIDs).
 		Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query user chats"})
@@ -128,7 +113,7 @@ func DeleteUser(c *gin.Context) {
 			Delete(&models.Chat{}).
 			Error; err != nil {
 			// Non‑fatal: user is gone, but log the error
-			log.Printf("failed to delete DMs for deleted user %s: %v", id, err)
+			log.Printf("failed to delete DMs for deleted user %s: %v", CurrentUser.ID, err)
 		}
 	}
 
@@ -136,27 +121,22 @@ func DeleteUser(c *gin.Context) {
 }
 
 func GetAuthenticatedUser(c *gin.Context) {
-	id, _ := c.Get("id")
-	var user models.User
-	if err := services.DB.
-		First(&user, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	now := time.Now()
-	user.LastSeen = &now
+	CurrentUser.LastSeen = &now
 	if err := services.DB.Save(&user).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"user": models.UserPublicInfo{
-		ID:       user.ID,
-		Name:     user.Name,
-		Username: user.Username,
-		PhotoURL: user.PhotoURL,
-		LastSeen: user.LastSeen,
+	c.JSON(http.StatusOK, gin.H{"profile": models.PublicProfile{
+		ID:          CurrentUser.ID,
+		DisplayName: CurrentUser.DisplayName,
+		Username:    CurrentUser.Username,
+		PhotoURL:    CurrentUser.PhotoURL,
+		LastSeen:    CurrentUser.LastSeen,
 	}})
 }
 
@@ -169,23 +149,4 @@ func ResetGPTUsage() {
 	}
 
 	fmt.Println("Successfully reset used_tokens for all users")
-}
-
-func UpdateFCMToken(c *gin.Context) {
-	id, _ := c.Get("id")
-	var fcmToken models.FCMToken
-
-	if err := c.BindJSON(&fcmToken); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "FCM Token not provided"})
-	}
-
-	err := services.DB.Model(&models.User{}).
-		Where("id = ?", id).
-		UpdateColumn("fcm_token", fcmToken.Token).Error
-	if err != nil {
-		fmt.Println("Failed to update fcm token", err)
-	}
-	fmt.Println("Token updated successfully")
-
-	c.JSON(http.StatusOK, gin.H{"message": "Token updated successfully"})
 }

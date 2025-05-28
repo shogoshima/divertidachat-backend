@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // Chat represents a conversation which could be either one-on-one or a group chat.
@@ -19,11 +18,4 @@ type Chat struct {
 
 	Messages  []Message  `gorm:"constraint:OnDelete:CASCADE;"`
 	ChatUsers []ChatUser `gorm:"constraint:OnDelete:CASCADE;"`
-}
-
-func (u *Chat) BeforeCreate(tx *gorm.DB) (err error) {
-	if u.ID == uuid.Nil {
-		u.ID = uuid.New()
-	}
-	return
 }

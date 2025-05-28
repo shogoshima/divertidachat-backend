@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/robfig/cron/v3"
@@ -13,6 +14,7 @@ import (
 
 func init() {
 	services.LoadEnvs()
+	services.InitFirebase()
 }
 
 func main() {
@@ -25,28 +27,33 @@ func main() {
 
 	// Initialize cron job to reset all user usage
 	c := cron.New()
-	c.AddFunc("@midnight", controllers.ResetGPTUsage)
+	c.AddFunc("3 0 * * *", controllers.ResetGPTUsage)
 	c.Start()
 
 	// Start goroutines for handling WebSocket messages and persistence
 	go controllers.HandleMessages()
 	go controllers.HandleActions()
 	go controllers.HandlePersistence()
+	go controllers.HandleNotifications(context.Background())
 
 	// WebSocket connection for real-time chat
 	routes.GET("/ws/:userId", controllers.HandleWebSocket)
 
-	// Authentication routes
-	routes.POST("/auth/login", controllers.Authenticate)
+	// Login Route
+	routes.POST("/login", controllers.Login)
 
 	// User routes
 	userRoutes := routes.Group("/users")
 	userRoutes.Use(middlewares.AuthMiddleware)
 	{
 		userRoutes.GET("/:username", controllers.GetUserByUsername) // Get user by username
-		userRoutes.GET("/me", controllers.GetAuthenticatedUser)     // Get authenticated user
-		userRoutes.PUT("/me", controllers.UpdateUser)               // Update authenticated user
-		userRoutes.DELETE("/me", controllers.DeleteUser)            // Delete authenticated user
+
+		userRoutes.GET("/me", controllers.GetAuthenticatedUser) // Get authenticated user
+		userRoutes.PUT("/me", controllers.UpdateUser)           // Update authenticated user
+		userRoutes.DELETE("/me", controllers.DeleteUser)        // Delete authenticated user
+
+		userRoutes.PUT("/fcm", controllers.UpdateFCMToken)
+		userRoutes.DELETE("/fcm", controllers.DeleteFCMToken)
 	}
 
 	// Chat routes

@@ -13,15 +13,15 @@ import (
 )
 
 func GetChatSummaries(c *gin.Context) {
-	// Extract the user ID from context
-	userID, _ := c.Get("id")
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	// Fetch chats that belong to this user
 	var chats []models.Chat
 	if err := services.DB.
 		Select("chats.id, chats.name, chats.is_group, chats.chat_photo").
 		Joins("JOIN chat_users ON chats.id = chat_users.chat_id").
-		Where("chat_users.user_id = ?", userID).
+		Where("chat_users.user_id = ?", CurrentUser.ID).
 		Order("chats.updated_at DESC").
 		Find(&chats).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch chats"})
@@ -40,17 +40,17 @@ func GetChatSummaries(c *gin.Context) {
 
 	// Fetch all participants grouped by chat
 	type ChatParticipant struct {
-		ChatID   uuid.UUID
-		UserID   uuid.UUID
-		Name     string
-		Username string
-		PhotoURL string
+		ChatID      uuid.UUID
+		UserID      string
+		DisplayName string
+		Username    string
+		PhotoURL    string
 	}
 
 	var rawParticipants []ChatParticipant
 	if err := services.DB.
 		Table("chat_users").
-		Select("chat_users.chat_id, users.id AS user_id, users.name, users.username, users.photo_url").
+		Select("chat_users.chat_id, users.id AS user_id, users.display_name, users.username, users.photo_url").
 		Joins("JOIN users ON users.id = chat_users.user_id").
 		Where("chat_users.chat_id IN ?", chatIDs).
 		Find(&rawParticipants).Error; err != nil {
@@ -59,13 +59,13 @@ func GetChatSummaries(c *gin.Context) {
 	}
 
 	// Group by chatID
-	participantsByChat := make(map[uuid.UUID][]models.UserPublicInfo)
+	participantsByChat := make(map[uuid.UUID][]models.PublicProfile)
 	for _, p := range rawParticipants {
-		participantsByChat[p.ChatID] = append(participantsByChat[p.ChatID], models.UserPublicInfo{
-			ID:       p.UserID,
-			Name:     p.Name,
-			Username: p.Username,
-			PhotoURL: p.PhotoURL,
+		participantsByChat[p.ChatID] = append(participantsByChat[p.ChatID], models.PublicProfile{
+			ID:          p.UserID,
+			DisplayName: p.DisplayName,
+			Username:    p.Username,
+			PhotoURL:    p.PhotoURL,
 		})
 	}
 
@@ -78,8 +78,8 @@ func GetChatSummaries(c *gin.Context) {
 		var chatName string = chat.Name
 		if !chat.IsGroup {
 			for _, p := range participants {
-				if p.ID != userID {
-					chatName = p.Name
+				if p.ID != CurrentUser.ID {
+					chatName = p.DisplayName
 					chatPhoto = p.PhotoURL
 					break
 				}
@@ -115,8 +115,8 @@ func GetChatSummaries(c *gin.Context) {
 }
 
 func GetSingleChatSummary(c *gin.Context) {
-	// Extract the user ID from context
-	userID, _ := c.Get("id")
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	chatIDStr := c.Param("chatId")
 	chatID, err := uuid.Parse(chatIDStr)
@@ -130,7 +130,7 @@ func GetSingleChatSummary(c *gin.Context) {
 	if err := services.DB.
 		Select("id, name, is_group, chat_photo").
 		Where("id = ? AND EXISTS (SELECT 1 FROM chat_users WHERE chat_id = ? AND user_id = ?)",
-			chatID, chatID, userID).
+			chatID, chatID, CurrentUser.ID).
 		First(&chat).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Chat not found or access denied"})
 		return
@@ -140,7 +140,7 @@ func GetSingleChatSummary(c *gin.Context) {
 	var participants []models.User
 	if err := services.DB.
 		Table("users").
-		Select("users.id", "users.name", "users.username", "users.photo_url").
+		Select("users.id", "users.display_name", "users.username", "users.photo_url").
 		Joins("JOIN chat_users ON chat_users.user_id = users.id").
 		Where("chat_users.chat_id = ?", chatID).
 		Find(&participants).Error; err != nil {
@@ -153,8 +153,8 @@ func GetSingleChatSummary(c *gin.Context) {
 	var chatName string = chat.Name
 	if !chat.IsGroup {
 		for _, p := range participants {
-			if p.ID != userID {
-				chatName = p.Name
+			if p.ID != CurrentUser.ID {
+				chatName = p.DisplayName
 				chatPhoto = p.PhotoURL
 				break
 			}
@@ -189,8 +189,8 @@ func GetSingleChatSummary(c *gin.Context) {
 }
 
 func GetChatDetails(c *gin.Context) {
-	// Extract and validate IDs
-	userID, _ := c.Get("id")
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	chatIDStr := c.Param("chatId")
 	chatID, err := uuid.Parse(chatIDStr)
@@ -204,7 +204,7 @@ func GetChatDetails(c *gin.Context) {
 	if err := services.DB.
 		Select("id, name, is_group").
 		Where("id = ? AND EXISTS (SELECT 1 FROM chat_users WHERE chat_id = ? AND user_id = ?)",
-			chatID, chatID, userID).
+			chatID, chatID, CurrentUser.ID).
 		First(&chat).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Chat not found or access denied"})
 		return
@@ -214,7 +214,7 @@ func GetChatDetails(c *gin.Context) {
 	var participants []models.User
 	if err := services.DB.
 		Table("chat_users").
-		Select("users.id, users.name, users.username, users.photo_url").
+		Select("users.id, users.display_name, users.username, users.photo_url").
 		Joins("JOIN users ON users.id = chat_users.user_id").
 		Where("chat_users.chat_id = ?", chat.ID).
 		Find(&participants).Error; err != nil {
@@ -222,14 +222,14 @@ func GetChatDetails(c *gin.Context) {
 		return
 	}
 
-	var participantsPublicInfo []models.UserPublicInfo
+	var participantsPublicInfo []models.PublicProfile
 	for _, p := range participants {
-		participantsPublicInfo = append(participantsPublicInfo, models.UserPublicInfo{
-			ID:       p.ID,
-			Name:     p.Name,
-			Username: p.Username,
-			PhotoURL: p.PhotoURL,
-			LastSeen: p.LastSeen,
+		participantsPublicInfo = append(participantsPublicInfo, models.PublicProfile{
+			ID:          p.ID,
+			DisplayName: p.DisplayName,
+			Username:    p.Username,
+			PhotoURL:    p.PhotoURL,
+			LastSeen:    p.LastSeen,
 		})
 	}
 

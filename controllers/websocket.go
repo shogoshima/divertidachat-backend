@@ -1,12 +1,15 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
 
+	"firebase.google.com/go/v4/messaging"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -18,17 +21,18 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-var clients = make(map[uuid.UUID]*websocket.Conn) // Connected clients
+var clients = make(map[string]*websocket.Conn) // Connected clients
 
-var Broadcast = make(chan Message)            // Broadcast channel
-var ActionBroadcast = make(chan Action)       // Action broadcast channel
-var mutex = &sync.Mutex{}                     // Protect clients map
-var PersistenceBroadcast = make(chan Message) // Persistence channel
+var Broadcast = make(chan Message)              // Broadcast channel
+var ActionBroadcast = make(chan Action)         // Action broadcast channel
+var mutex = &sync.Mutex{}                       // Protect clients map
+var PersistenceBroadcast = make(chan Message)   // Persistence channel
+var NotificationsBroadcast = make(chan Message) // FCM Notifications channel
 
 type Message struct {
 	ID           uuid.UUID `json:"id"`
 	Text         string    `json:"text"`
-	SenderId     uuid.UUID `json:"sender_id"`
+	SenderId     string    `json:"sender_id"`
 	ChatId       uuid.UUID `json:"chat_id"`
 	SentAt       time.Time `json:"sent_at"`
 	TextFilterID int       `json:"text_filter_id"`
@@ -37,6 +41,10 @@ type Message struct {
 type Action struct {
 	ChatId uuid.UUID `json:"chat_id"`
 	Type   string    `json:"type"`
+}
+
+type Authorization struct {
+	IdToken string `json:"id_token"`
 }
 
 type Inbound struct {
@@ -56,13 +64,6 @@ func HandleWebSocket(c *gin.Context) {
 		return
 	}
 
-	// Parse the user ID from the URL parameter
-	parsedUserID, err := uuid.Parse(userID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-		return
-	}
-
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		fmt.Println("Failed to upgrade to WebSocket:", err)
@@ -70,14 +71,16 @@ func HandleWebSocket(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	addClient(parsedUserID, conn)
+	addClient(userID, conn)
+
+	authenticate(userID, conn, c.Request.Context())
 
 	for {
 		var in Inbound
 		err := conn.ReadJSON(&in)
 		if err != nil {
 			fmt.Println("Read error:", err)
-			removeClient(parsedUserID)
+			removeClient(userID)
 			break
 		}
 
@@ -93,6 +96,7 @@ func HandleWebSocket(c *gin.Context) {
 			if m.TextFilterID == 0 {
 				Broadcast <- m
 				PersistenceBroadcast <- m
+				NotificationsBroadcast <- m
 				continue
 			}
 
@@ -118,8 +122,10 @@ func HandleWebSocket(c *gin.Context) {
 
 				// update the text and push into your pipelines
 				msg.Text = resp
+
 				Broadcast <- msg
 				PersistenceBroadcast <- msg
+				NotificationsBroadcast <- msg
 			}(conn, m)
 
 		case "action":
@@ -216,6 +222,62 @@ func HandleMessages() {
 	}
 }
 
+func HandleNotifications(ctx context.Context) {
+	for {
+		msg := <-NotificationsBroadcast
+
+		chatID := msg.ChatId
+		userID := msg.SenderId
+		fmt.Println("Broadcasting notification to chat ID:", chatID)
+
+		var tokens []string
+		err := services.DB.
+			Table("users").
+			Joins("JOIN chat_users cu ON cu.user_id = users.id").
+			Where("cu.chat_id = ?", chatID).
+			Where("users.id <> ?", userID).
+			Where("users.fcm_token IS NOT NULL").
+			Pluck("users.fcm_token", &tokens).Error
+		if err != nil {
+			fmt.Println("Failed to find chat users:", err)
+			continue
+		}
+
+		var sender models.User
+		if err := services.DB.
+			First(&sender, "id = ?", userID).
+			Error; err != nil {
+			fmt.Println("Failed to load sender user:", err)
+		}
+
+		for _, token := range tokens {
+			// Construct the message.
+			message := &messaging.Message{
+				Notification: &messaging.Notification{
+					Title: fmt.Sprintf("New Message from %s", sender.DisplayName),
+					Body:  msg.Text,
+				},
+				Data: map[string]string{
+					"type":        "message",
+					"chat_id":     chatID.String(),
+					"message_id":  msg.ID.String(),
+					"sender_name": sender.DisplayName,
+					"text":        msg.Text,
+				},
+				Token: token,
+			}
+
+			// Send the message.
+			response, err := services.MessagingClient.Send(ctx, message)
+			if err != nil {
+				log.Fatalf("error sending message: %v\n", err)
+				continue
+			}
+			log.Println("Successfully sent message:", response)
+		}
+	}
+}
+
 func HandlePersistence() {
 	// This function is responsible for persisting messages to the database.
 	// You can implement this function to save messages to your database.
@@ -254,16 +316,47 @@ func sendError(conn *websocket.Conn, msg string) {
 	})
 }
 
-func addClient(id uuid.UUID, conn *websocket.Conn) {
+func addClient(id string, conn *websocket.Conn) {
 	mutex.Lock()
 	clients[id] = conn
 	fmt.Println("Client connected:", conn.RemoteAddr())
 	mutex.Unlock()
 }
 
-func removeClient(id uuid.UUID) {
+func removeClient(id string) {
 	mutex.Lock()
 	delete(clients, id)
 	fmt.Println("Client disconnected.")
 	mutex.Unlock()
+}
+
+func authenticate(id string, conn *websocket.Conn, ctx context.Context) {
+	var initialLoad Inbound
+	err := conn.ReadJSON(&initialLoad)
+	if err != nil {
+		fmt.Println("Read error:", err)
+		removeClient(id)
+		return
+	}
+
+	if initialLoad.Type != "authentication" {
+		sendError(conn, "invalid message payload")
+		removeClient(id)
+		return
+	}
+
+	var auth Authorization
+	if err := json.Unmarshal(initialLoad.Data, &auth); err != nil {
+		sendError(conn, "invalid message payload")
+		removeClient(id)
+		return
+	}
+
+	_, err = services.AuthClient.VerifyIDToken(ctx, auth.IdToken)
+	if err != nil {
+		sendError(conn, "invalid message payload")
+		removeClient(id)
+		return
+	}
+
 }

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/google/uuid"
 	"github.com/shogoshima/divertidachat-backend/models"
 )
 
@@ -16,7 +15,7 @@ var apiKey = os.Getenv("OPENAI_API_KEY")
 
 const apiUrl = "https://api.openai.com/v1/chat/completions"
 
-func GetGPTResponse(messages []models.GPTMessage, senderId uuid.UUID) (string, error) {
+func GetGPTResponse(messages []models.GPTMessage, senderId string) (string, error) {
 	if apiKey == "" {
 		return "", fmt.Errorf("OpenAI API key is not set")
 	}
@@ -76,13 +75,13 @@ func GetGPTResponse(messages []models.GPTMessage, senderId uuid.UUID) (string, e
 }
 
 // fetchUser retrieves the user from the DB
-func fetchUser(id uuid.UUID) (*models.User, error) {
+func fetchUser(id string) (*models.User, error) {
 	var user models.User
 	err := DB.Model(&user).Where("id = ?", id).First(&user).Error
 	return &user, err
 }
 
 // updateUserTokenUsage updates the user's used token count
-func updateUserTokenUsage(id uuid.UUID, tokens int) error {
+func updateUserTokenUsage(id string, tokens int) error {
 	return DB.Model(&models.User{}).Where("id = ?", id).Update("used_tokens", tokens).Error
 }

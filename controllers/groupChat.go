@@ -12,19 +12,8 @@ import (
 )
 
 func CreateGroupChat(c *gin.Context) {
-	// Extract current user ID from context
-	currentUserID, exists := c.Get("id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user context"})
-		return
-	}
-
-	// Get the current user
-	var currentUser models.User
-	if err := services.DB.First(&currentUser, "id = ?", currentUserID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	// Parse request body
 	type requestBody struct {
@@ -70,11 +59,11 @@ func CreateGroupChat(c *gin.Context) {
 	chatUsers := make([]models.ChatUser, 0, len(users)+1)
 	chatUsers = append(chatUsers, models.ChatUser{
 		ChatID: newChat.ID,
-		UserID: currentUser.ID,
+		UserID: CurrentUser.ID,
 	})
 	for _, u := range users {
 		// Prevent duplicates if the creator username was included in the list
-		if u.ID == currentUser.ID {
+		if u.ID == CurrentUser.ID {
 			continue
 		}
 		chatUsers = append(chatUsers, models.ChatUser{
@@ -100,18 +89,8 @@ func CreateGroupChat(c *gin.Context) {
 }
 
 func AddUsersToGroupChat(c *gin.Context) {
-	// Extract current user ID from context
-	currentUserID, exists := c.Get("id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user context"})
-		return
-	}
-	// Get the current user
-	var currentUser models.User
-	if err := services.DB.First(&currentUser, "id = ?", currentUserID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	chatIDParam := c.Param("chatId")
 	chatID, err := uuid.Parse(chatIDParam)
@@ -123,7 +102,7 @@ func AddUsersToGroupChat(c *gin.Context) {
 	var chat models.Chat
 	if err := services.DB.
 		Joins("JOIN chat_users cu ON cu.chat_id = chats.id").
-		Where("chats.id = ? AND cu.user_id = ? AND chats.is_group = true", chatID, currentUserID).
+		Where("chats.id = ? AND cu.user_id = ? AND chats.is_group = true", chatID, CurrentUser.ID).
 		First(&chat).
 		Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -155,13 +134,13 @@ func AddUsersToGroupChat(c *gin.Context) {
 	}
 
 	// Filter out users already in the chat
-	var existing []uuid.UUID
+	var existing []string
 	services.DB.
 		Model(&models.ChatUser{}).
 		Where("chat_id = ? AND user_id IN ?", chatID, getUserIDs(usersToAdd)).
 		Pluck("user_id", &existing)
 
-	existingSet := make(map[uuid.UUID]struct{}, len(existing))
+	existingSet := make(map[string]struct{}, len(existing))
 	for _, id := range existing {
 		existingSet[id] = struct{}{}
 	}
@@ -192,17 +171,8 @@ func AddUsersToGroupChat(c *gin.Context) {
 }
 
 func LeaveGroupChat(c *gin.Context) {
-	currentUserID, exists := c.Get("id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user context"})
-		return
-	}
-
-	var currentUser models.User
-	if err := services.DB.First(&currentUser, "id = ?", currentUserID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	chatIDParam := c.Param("chatId")
 	chatID, err := uuid.Parse(chatIDParam)
@@ -214,7 +184,7 @@ func LeaveGroupChat(c *gin.Context) {
 	var chatUser models.ChatUser
 	if err := services.DB.
 		Joins("JOIN chats ON chats.id = chat_users.chat_id").
-		Where("chat_users.user_id = ? AND chat_users.chat_id = ? AND chats.is_group = true", currentUser.ID, chatID).
+		Where("chat_users.user_id = ? AND chat_users.chat_id = ? AND chats.is_group = true", CurrentUser.ID, chatID).
 		First(&chatUser).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Group chat not found or you’re not a member"})
@@ -233,17 +203,8 @@ func LeaveGroupChat(c *gin.Context) {
 }
 
 func UpdateGroupChatInfo(c *gin.Context) {
-	currentUserID, exists := c.Get("id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user context"})
-		return
-	}
-
-	var currentUser models.User
-	if err := services.DB.First(&currentUser, "id = ?", currentUserID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
+	user, _ := c.Get("currentUser")
+	CurrentUser := user.(models.User)
 
 	chatIDParam := c.Param("chatId")
 	chatID, err := uuid.Parse(chatIDParam)
@@ -255,7 +216,7 @@ func UpdateGroupChatInfo(c *gin.Context) {
 	var chat models.Chat
 	if err := services.DB.
 		Joins("JOIN chat_users cu ON cu.chat_id = chats.id").
-		Where("chats.id = ? AND cu.user_id = ? AND chats.is_group = true", chatID, currentUserID).
+		Where("chats.id = ? AND cu.user_id = ? AND chats.is_group = true", chatID, CurrentUser.ID).
 		First(&chat).
 		Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
